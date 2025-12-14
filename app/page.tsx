@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from 'react';
 import { TravelEntry, CountryStay, CountryRule } from '@/lib/types';
 import { TAX_RULES } from '@/lib/taxRules';
 import { calculateCountryStays, getStatusColor, getStatusText } from '@/lib/calculations';
+import { syncTravelEntries, syncCountryRules } from '@/lib/sync';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import * as Flags from 'country-flag-icons/react/3x2';
 
 // Map country codes to flag components
@@ -314,34 +316,80 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showCountryManager, setShowCountryManager] = useState(false);
   const [editingCountry, setEditingCountry] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load data from localStorage on mount
+  // Load data from cloud or localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem('travelEntries');
-    const savedCountries = localStorage.getItem('countryRules');
+    const loadData = async () => {
+      // Try to load from cloud first
+      if (isSupabaseConfigured()) {
+        try {
+          const cloudEntries = await syncTravelEntries.load();
+          const cloudCountries = await syncCountryRules.load();
 
-    if (saved) {
-      try {
-        setEntries(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to load saved data', e);
-      }
-    }
+          if (cloudEntries) {
+            setEntries(cloudEntries);
+          } else {
+            // Fallback to localStorage
+            const saved = localStorage.getItem('travelEntries');
+            if (saved) setEntries(JSON.parse(saved));
+          }
 
-    if (savedCountries) {
-      try {
-        setCountries(JSON.parse(savedCountries));
-      } catch (e) {
-        console.error('Failed to load saved countries', e);
+          if (cloudCountries) {
+            setCountries(cloudCountries);
+          } else {
+            // Fallback to localStorage
+            const savedCountries = localStorage.getItem('countryRules');
+            if (savedCountries) {
+              setCountries(JSON.parse(savedCountries));
+            }
+          }
+        } catch (error) {
+          console.error('Cloud load failed, using localStorage', error);
+          // Fallback to localStorage
+          const saved = localStorage.getItem('travelEntries');
+          const savedCountries = localStorage.getItem('countryRules');
+          if (saved) setEntries(JSON.parse(saved));
+          if (savedCountries) setCountries(JSON.parse(savedCountries));
+        }
+      } else {
+        // No cloud configured, use localStorage only
+        const saved = localStorage.getItem('travelEntries');
+        const savedCountries = localStorage.getItem('countryRules');
+        if (saved) setEntries(JSON.parse(saved));
+        if (savedCountries) setCountries(JSON.parse(savedCountries));
       }
-    }
+    };
+
+    loadData();
   }, []);
 
-  // Save to localStorage and recalculate whenever entries or countries change
+  // Save to localStorage and cloud, then recalculate whenever entries or countries change
   useEffect(() => {
     localStorage.setItem('travelEntries', JSON.stringify(entries));
     localStorage.setItem('countryRules', JSON.stringify(countries));
+
+    // Sync to cloud if configured
+    const syncToCloud = async () => {
+      if (isSupabaseConfigured()) {
+        try {
+          setSyncStatus('syncing');
+          await Promise.all([
+            syncTravelEntries.save(entries),
+            syncCountryRules.save(countries)
+          ]);
+          setSyncStatus('synced');
+          setTimeout(() => setSyncStatus('idle'), 2000);
+        } catch (error) {
+          console.error('Cloud sync failed:', error);
+          setSyncStatus('error');
+          setTimeout(() => setSyncStatus('idle'), 3000);
+        }
+      }
+    };
+
+    syncToCloud();
 
     // Recalculate with current country rules
     const stays: CountryStay[] = [];
@@ -561,6 +609,22 @@ export default function Home() {
         <p className="text-[#5C4D3D] text-sm">
           [ Track your days · Monitor tax residency · Never lose data ]
         </p>
+        {isSupabaseConfigured() && (
+          <div className="mt-2 flex items-center justify-center gap-2 text-xs">
+            {syncStatus === 'syncing' && (
+              <span className="text-[#8B7355]">☁️ Syncing...</span>
+            )}
+            {syncStatus === 'synced' && (
+              <span className="text-[#4A7C59]">✓ Synced to cloud</span>
+            )}
+            {syncStatus === 'error' && (
+              <span className="text-[#A63446]">⚠ Sync failed</span>
+            )}
+            {syncStatus === 'idle' && (
+              <span className="text-[#5C4D3D]">☁️ Cloud sync enabled</span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
