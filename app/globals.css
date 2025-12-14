@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #F5F1E8;
+  --bg-secondary: #E8DCC4;
+  --bg-card: #FFFBF0;
+  --text-primary: #2D2419;
+  --text-secondary: #5C4D3D;
+  --accent: #8B7355;
+  --accent-hover: #6B5335;
+  --border: #D4C4A8;
+}
+
+* {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+body {
+  background: linear-gradient(135deg, #F5F1E8 0%, #E8DCC4 100%);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+.card-shadow {
+  box-shadow: 4px 4px 0px rgba(45, 36, 25, 0.1);
+}
+
+.card-shadow:hover {
+  box-shadow: 6px 6px 0px rgba(45, 36, 25, 0.15);
+  transform: translateY(-2px);
+  transition: all 0.2s ease;
+}
+
+.calendar-day {
+  transition: all 0.15s ease;
+}
+
+.calendar-day:hover {
+  transform: scale(1.05);
+  z-index: 10;
+}
