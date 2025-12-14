@@ -1,4 +1,4 @@
-import { TravelEntry, CountryStay } from './types';
+import { TravelEntry, CountryStay, CountryRule } from './types';
 import { TAX_RULES } from './taxRules';
 
 export function calculateDaysInCountry(
@@ -45,20 +45,61 @@ export function getCalendarYearRange(year?: number): { start: Date; end: Date } 
   };
 }
 
-export function getRolling12MonthRange(): { start: Date; end: Date } {
-  const end = new Date();
-  const start = new Date();
+export function getRolling12MonthRange(endDate?: Date): { start: Date; end: Date } {
+  const end = endDate || new Date();
+  const start = new Date(end);
   start.setFullYear(start.getFullYear() - 1);
   return { start, end };
 }
 
-export function calculateCountryStays(entries: TravelEntry[]): CountryStay[] {
+export function calculateCountryStays(entries: TravelEntry[], countries?: Record<string, CountryRule>): CountryStay[] {
   const stays: CountryStay[] = [];
+  const rulesToUse = countries || TAX_RULES;
 
-  Object.values(TAX_RULES).forEach(rule => {
+  Object.values(rulesToUse).forEach(rule => {
     const range = rule.calendarType === 'calendar-year'
       ? getCalendarYearRange()
       : getRolling12MonthRange();
+
+    const days = calculateDaysInCountry(entries, rule.code, range.start, range.end);
+
+    let status: 'safe' | 'warning' | 'danger' = 'safe';
+    if (days >= rule.threshold) {
+      status = 'danger';
+    } else if (days >= rule.threshold * 0.8) {
+      status = 'warning';
+    }
+
+    stays.push({
+      country: rule.name,
+      days,
+      status,
+      threshold: rule.threshold,
+      calendarType: rule.calendarType
+    });
+  });
+
+  return stays.sort((a, b) => b.days - a.days);
+}
+
+// Calculate country stays for a specific year (historical view)
+export function calculateCountryStaysForYear(
+  entries: TravelEntry[],
+  year: number,
+  countries: Record<string, CountryRule>
+): CountryStay[] {
+  const stays: CountryStay[] = [];
+
+  Object.values(countries).forEach(rule => {
+    let range: { start: Date; end: Date };
+
+    if (rule.calendarType === 'calendar-year') {
+      // For calendar year, use the specified year
+      range = getCalendarYearRange(year);
+    } else {
+      // For rolling 12 months, use Dec 31 of that year as the end date
+      range = getRolling12MonthRange(new Date(year, 11, 31, 23, 59, 59));
+    }
 
     const days = calculateDaysInCountry(entries, rule.code, range.start, range.end);
 

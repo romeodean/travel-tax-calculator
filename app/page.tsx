@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { TravelEntry, CountryStay, CountryRule } from '@/lib/types';
 import { TAX_RULES } from '@/lib/taxRules';
-import { calculateCountryStays, getStatusColor, getStatusText } from '@/lib/calculations';
+import { calculateCountryStays, calculateCountryStaysForYear, getStatusColor, getStatusText } from '@/lib/calculations';
 import { syncTravelEntries, syncCountryRules } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import * as Flags from 'country-flag-icons/react/3x2';
@@ -317,7 +317,25 @@ export default function Home() {
   const [showCountryManager, setShowCountryManager] = useState(false);
   const [editingCountry, setEditingCountry] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [selectedStatusYear, setSelectedStatusYear] = useState<number | 'current'>(getCurrentYear());
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function getCurrentYear() {
+    return new Date().getFullYear();
+  }
+
+  // Get all available years from travel data
+  const getAvailableYears = (): number[] => {
+    if (entries.length === 0) return [getCurrentYear()];
+
+    const years = new Set<number>();
+    entries.forEach(entry => {
+      years.add(new Date(entry.arrivalDate).getFullYear());
+      years.add(new Date(entry.departureDate).getFullYear());
+    });
+
+    return Array.from(years).sort((a, b) => b - a);
+  };
 
   // Load data from cloud or localStorage on mount
   useEffect(() => {
@@ -759,9 +777,42 @@ export default function Home() {
 
           {/* Status Dashboard */}
           <div className="bg-[#FFFBF0] border-2 border-[#D4C4A8] rounded-lg p-6 card-shadow mt-6">
-            <h2 className="text-xl font-bold mb-4 text-[#2D2419]">🚦 TAX STATUS</h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-[#2D2419]">🚦 TAX STATUS</h2>
+            </div>
+
+            {/* Year Selector */}
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-[#5C4D3D] mb-2 uppercase tracking-wide">
+                View Period
+              </label>
+              <select
+                value={selectedStatusYear}
+                onChange={(e) => setSelectedStatusYear(e.target.value === 'current' ? 'current' : parseInt(e.target.value))}
+                className="w-full px-3 py-2 border-2 border-[#D4C4A8] rounded bg-white focus:outline-none focus:border-[#8B7355] text-sm font-mono"
+              >
+                <option value="current">Current (Today)</option>
+                {getAvailableYears().map(year => (
+                  <option key={year} value={year}>
+                    {year} {year === getCurrentYear() ? '(This Year)' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-[#5C4D3D] mt-1">
+                {selectedStatusYear === 'current'
+                  ? 'Showing current tax status (calendar year or rolling 12 months from today)'
+                  : `Showing status as of Dec 31, ${selectedStatusYear}`
+                }
+              </p>
+            </div>
+
             <div className="space-y-3">
-              {displayedCountryStays.map((stay) => {
+              {(() => {
+                const staysToDisplay = selectedStatusYear === 'current'
+                  ? displayedCountryStays
+                  : calculateCountryStaysForYear(entries, selectedStatusYear as number, countries).filter(s => s.days > 0);
+
+                return staysToDisplay.length > 0 ? staysToDisplay.map((stay) => {
                 const countryRule = Object.values(countries).find(c => c.name === stay.country);
                 const FlagIcon = countryRule ? FlagComponents[countryRule.code] : null;
                 return (
@@ -792,10 +843,12 @@ export default function Home() {
                     </div>
                   </div>
                 );
-              })}
-              {displayedCountryStays.length === 0 && (
-                <p className="text-center text-sm text-[#5C4D3D] py-4">No travel data yet</p>
-              )}
+              }) : (
+                <p className="text-center text-sm text-[#5C4D3D] py-4">
+                  {selectedStatusYear === 'current' ? 'No travel data yet' : `No travel data for ${selectedStatusYear}`}
+                </p>
+              );
+              })()}
             </div>
           </div>
         </div>
