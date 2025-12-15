@@ -136,3 +136,4 @@ This tool is for informational purposes only and should not be considered as tax
 ## Support
 
 For issues or questions, please open an issue on GitHub.
+# Trigger rebuild
