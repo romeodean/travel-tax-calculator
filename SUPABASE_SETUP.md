@@ -5,10 +5,10 @@ This guide will help you set up cross-device data synchronization using Supabase
 ## 🎯 What You'll Get
 
 - ✅ **Automatic cloud sync** across all your devices
-- ✅ **Same unique Device ID** - your data syncs to the same "user" on all devices
+- ✅ **User authentication** - secure email/password login
 - ✅ **Free forever** (up to 500MB database)
 - ✅ **Fallback to localStorage** if cloud fails
-- ✅ **No sign-up required** for end users
+- ✅ **Secure user isolation** - each user only sees their own data
 
 ## 📋 Prerequisites
 
@@ -78,19 +78,29 @@ CREATE INDEX idx_country_rules_user_id ON country_rules(user_id);
 ALTER TABLE travel_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE country_rules ENABLE ROW LEVEL SECURITY;
 
--- Create policies that allow anyone to read/write their own data
--- (using device_id as user_id for anonymous access)
-CREATE POLICY "Allow all operations for all users on travel_entries"
+-- Create policies for authenticated users
+-- Users can only access their own data
+CREATE POLICY "Users can access own travel entries"
   ON travel_entries
   FOR ALL
-  USING (true)
-  WITH CHECK (true);
+  USING (user_id = auth.uid()::text);
 
-CREATE POLICY "Allow all operations for all users on country_rules"
+CREATE POLICY "Users can access own country rules"
   ON country_rules
   FOR ALL
-  USING (true)
-  WITH CHECK (true);
+  USING (user_id = auth.uid()::text);
+
+-- Optional: Allow legacy deviceId-based access (for backwards compatibility)
+-- Remove these if you only want authenticated access
+CREATE POLICY "Allow deviceId access to travel entries"
+  ON travel_entries
+  FOR ALL
+  USING (user_id LIKE 'device_%');
+
+CREATE POLICY "Allow deviceId access to country rules"
+  ON country_rules
+  FOR ALL
+  USING (user_id LIKE 'device_%');
 ```
 
 4. Click **"Run"** (or press Cmd/Ctrl + Enter)
@@ -141,33 +151,38 @@ npm run dev
 
 ## 🧪 Step 5: Test It!
 
-1. **On Device 1** (e.g., your laptop):
+### First Time User Flow
+
+1. **Visit the app** (http://localhost:3000 or your Vercel URL)
+2. **See the login screen** with email and password fields
+3. **Create an account**:
+   - Click "Don't have an account? Sign up"
+   - Enter email: `test@example.com`
+   - Enter password: `password123` (minimum 6 characters)
+   - Click "CREATE ACCOUNT"
+4. **Add travel data**:
    - Add a travel entry
    - You should see "✓ Synced to cloud"
-
-2. **On Device 2** (e.g., your phone):
-   - Open the same app URL
-   - Refresh the page
+5. **Sign out**: Click "Sign out" in the header
+6. **Test cross-device sync**:
+   - Open the app on another device (or browser)
+   - Sign in with the same email/password
    - Your data should appear! 🎉
 
-### How Device Sync Works:
+### How Authentication & Sync Works
 
-The app generates a unique `deviceId` on first visit and stores it in `localStorage`. This ID is used to:
-- Save your data to Supabase
-- Load your data from Supabase
-- Keep all your devices in sync
+The app now uses **Supabase Authentication** for secure, user-based cloud sync:
 
-**To sync the same data across multiple devices:**
-- On Device 1: Open browser console (F12) and run:
-  ```javascript
-  localStorage.getItem('deviceId')
-  ```
-- Copy the device ID
-- On Device 2: Open console and run:
-  ```javascript
-  localStorage.setItem('deviceId', 'paste-device-id-here')
-  ```
-- Reload the page - your data will sync!
+1. **User creates account** → Supabase Auth generates a unique user ID
+2. **User signs in** → JWT session token stored securely
+3. **Data is saved** → Associated with user ID (not device ID)
+4. **User signs in on another device** → Same data appears automatically
+
+**Key Benefits:**
+- ✅ No need to manually sync device IDs
+- ✅ Secure password-based authentication
+- ✅ Each user's data is isolated and private
+- ✅ Works across unlimited devices automatically
 
 ---
 
@@ -183,17 +198,31 @@ The app generates a unique `deviceId` on first visit and stores it in `localStor
 
 ## 🔒 Security Notes
 
-- ✅ **Anonymous access** - No login required
+- ✅ **User authentication** - Email/password login required
 - ✅ **Row Level Security** enabled
-- ✅ **Public read/write** - Anyone with the URL can access
-- ⚠️ **Not production-ready for sensitive data**
+- ✅ **User isolation** - Each user only sees their own data
+- ✅ **Secure password storage** - Hashed by Supabase
+- ✅ **JWT sessions** - Automatic token management
+- ⚠️ **Email verification disabled** - For easier testing (enable in production)
 
-### To Add Real Authentication (Optional):
+### Security Features
 
-If you want proper user accounts:
-1. Use Supabase Auth
-2. Replace `deviceId` with actual user IDs
-3. Update RLS policies to `user_id = auth.uid()`
+**Authentication:**
+- Passwords hashed with bcrypt
+- JWT tokens for session management
+- Automatic token refresh
+- Secure password requirements (min 6 characters)
+
+**Data Privacy:**
+- Row Level Security (RLS) policies enforce user isolation
+- Users can only query/modify their own data
+- Auth user ID (`auth.uid()`) used for access control
+
+**Optional: Enable Email Verification**
+1. Go to Supabase Dashboard → Authentication → Settings
+2. Enable "Enable email confirmations"
+3. Configure email templates (optional)
+4. Users must verify email before accessing data
 
 ---
 

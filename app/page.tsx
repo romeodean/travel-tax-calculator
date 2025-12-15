@@ -6,6 +6,7 @@ import { TAX_RULES } from '@/lib/taxRules';
 import { calculateCountryStays, calculateCountryStaysForYear, getStatusColor, getStatusText } from '@/lib/calculations';
 import { syncTravelEntries, syncCountryRules } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { getCurrentUser, signIn, signUp, signOut, hasLocalDataToMigrate, User } from '@/lib/auth';
 import * as Flags from 'country-flag-icons/react/3x2';
 
 // Map country codes to flag components
@@ -305,7 +306,155 @@ function CalendarView({ entries, countries }: { entries: TravelEntry[]; countrie
   );
 }
 
+// Login/Signup Component
+function AuthModal({ onAuthSuccess }: { onAuthSuccess: (user: User) => void }) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showMigrationNotice, setShowMigrationNotice] = useState(false);
+
+  useEffect(() => {
+    // Check if there's local data to migrate
+    if (hasLocalDataToMigrate()) {
+      setShowMigrationNotice(true);
+    }
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      if (!email || !password) {
+        setError('Please enter both email and password');
+        setLoading(false);
+        return;
+      }
+
+      if (password.length < 6) {
+        setError('Password must be at least 6 characters');
+        setLoading(false);
+        return;
+      }
+
+      const result = isLogin
+        ? await signIn(email, password)
+        : await signUp(email, password);
+
+      if (result.error) {
+        setError(result.error);
+        setLoading(false);
+        return;
+      }
+
+      if (result.user) {
+        onAuthSuccess(result.user);
+      } else {
+        setError('Authentication failed');
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setError(err.message || 'An error occurred');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="bg-[#FFFBF0] border-2 border-[#D4C4A8] rounded-lg p-8 card-shadow max-w-md w-full">
+        <div className="text-center mb-6">
+          <h1 className="text-4xl font-bold mb-2 text-[#2D2419]">✈️ TRAVEL TAX CALCULATOR</h1>
+          <p className="text-sm text-[#5C4D3D]">Sign in to sync across devices</p>
+        </div>
+
+        {showMigrationNotice && (
+          <div className="mb-4 p-3 bg-[#E8DCC4] border-2 border-[#D4C4A8] rounded">
+            <p className="text-xs font-medium text-[#2D2419]">
+              ℹ️ We found existing data on this device. It will be synced to your account after login.
+            </p>
+          </div>
+        )}
+
+        {error && (
+          <div className="mb-4 p-3 bg-[#FFEBE9] border-2 border-[#A63446] rounded">
+            <p className="text-xs font-medium text-[#A63446]">{error}</p>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-[#5C4D3D] mb-2 uppercase tracking-wide">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3 py-2 border-2 border-[#D4C4A8] rounded bg-white focus:outline-none focus:border-[#8B7355]"
+              placeholder="your@email.com"
+              disabled={loading}
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-[#5C4D3D] mb-2 uppercase tracking-wide">
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-3 py-2 border-2 border-[#D4C4A8] rounded bg-white focus:outline-none focus:border-[#8B7355]"
+              placeholder="••••••••"
+              disabled={loading}
+            />
+            {!isLogin && (
+              <p className="text-xs text-[#5C4D3D] mt-1">Minimum 6 characters</p>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-[#8B7355] text-white py-3 px-4 rounded font-bold hover:bg-[#6B5335] transition-colors border-2 border-[#6B5335] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Please wait...' : (isLogin ? 'SIGN IN' : 'CREATE ACCOUNT')}
+          </button>
+        </form>
+
+        <div className="mt-4 text-center">
+          <button
+            onClick={() => {
+              setIsLogin(!isLogin);
+              setError('');
+            }}
+            className="text-sm text-[#8B7355] hover:text-[#6B5335] font-medium"
+            disabled={loading}
+          >
+            {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+          </button>
+        </div>
+
+        <div className="mt-6 pt-6 border-t-2 border-[#D4C4A8]">
+          <p className="text-xs text-[#5C4D3D] text-center">
+            {isSupabaseConfigured()
+              ? '🔒 Secure cloud sync enabled'
+              : '⚠️ Cloud sync not configured'
+            }
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false); // Track if initial load is complete
   const [entries, setEntries] = useState<TravelEntry[]>([]);
   const [countries, setCountries] = useState<Record<string, CountryRule>>({ ...TAX_RULES });
   const [departureCountry, setDepartureCountry] = useState('');
@@ -337,8 +486,26 @@ export default function Home() {
     return Array.from(years).sort((a, b) => b - a);
   };
 
-  // Load data from cloud or localStorage on mount
+  // Check authentication on mount
   useEffect(() => {
+    const checkAuth = async () => {
+      if (!isSupabaseConfigured()) {
+        setAuthLoading(false);
+        return;
+      }
+
+      const currentUser = await getCurrentUser();
+      setUser(currentUser);
+      setAuthLoading(false);
+    };
+
+    checkAuth();
+  }, []);
+
+  // Load data from cloud or localStorage on mount (after auth is checked)
+  useEffect(() => {
+    if (authLoading) return; // Wait for auth check
+
     const loadData = async () => {
       // Try to load from cloud first
       if (isSupabaseConfigured()) {
@@ -378,13 +545,19 @@ export default function Home() {
         if (saved) setEntries(JSON.parse(saved));
         if (savedCountries) setCountries(JSON.parse(savedCountries));
       }
+
+      // Mark data as loaded to prevent sync loop
+      setDataLoaded(true);
     };
 
     loadData();
-  }, []);
+  }, [authLoading]);
 
   // Save to localStorage and cloud, then recalculate whenever entries or countries change
   useEffect(() => {
+    // Don't sync until initial data load is complete
+    if (!dataLoaded) return;
+
     localStorage.setItem('travelEntries', JSON.stringify(entries));
     localStorage.setItem('countryRules', JSON.stringify(countries));
 
@@ -449,7 +622,7 @@ export default function Home() {
     });
 
     setCountryStays(stays.sort((a, b) => b.days - a.days));
-  }, [entries, countries]);
+  }, [entries, countries, dataLoaded]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -612,6 +785,55 @@ export default function Home() {
     }
   };
 
+  const handleLogout = async () => {
+    if (confirm('Are you sure you want to sign out?')) {
+      await signOut();
+      setUser(null);
+      // Optionally clear local data on logout
+      // setEntries([]);
+      // setCountries({ ...TAX_RULES });
+    }
+  };
+
+  const handleAuthSuccess = async (authenticatedUser: User) => {
+    setUser(authenticatedUser);
+
+    // After successful auth, check if there's local data to migrate
+    if (hasLocalDataToMigrate()) {
+      const localEntries = localStorage.getItem('travelEntries');
+      const localCountries = localStorage.getItem('countryRules');
+
+      // Sync local data to cloud for this user
+      if (localEntries) {
+        const parsedEntries = JSON.parse(localEntries);
+        await syncTravelEntries.save(parsedEntries);
+        setEntries(parsedEntries);
+      }
+
+      if (localCountries) {
+        const parsedCountries = JSON.parse(localCountries);
+        await syncCountryRules.save(parsedCountries);
+        setCountries(parsedCountries);
+      }
+    }
+  };
+
+  // Show auth modal if Supabase is configured but user is not authenticated
+  if (isSupabaseConfigured() && !authLoading && !user) {
+    return <AuthModal onAuthSuccess={handleAuthSuccess} />;
+  }
+
+  // Show loading state while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-[#5C4D3D] font-mono">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Filter to show all non-zero countries OR top 5
   const displayedCountryStays = countryStays.filter(stay => stay.days > 0).length > 0
     ? countryStays.filter(stay => stay.days > 0)
@@ -628,19 +850,32 @@ export default function Home() {
           [ Track your days · Monitor tax residency · Never lose data ]
         </p>
         {isSupabaseConfigured() && (
-          <div className="mt-2 flex items-center justify-center gap-2 text-xs">
-            {syncStatus === 'syncing' && (
-              <span className="text-[#8B7355]">☁️ Syncing...</span>
+          <div className="mt-2 flex flex-col items-center gap-1 text-xs">
+            {user && (
+              <div className="flex items-center gap-2">
+                <span className="text-[#5C4D3D]">👤 {user.email}</span>
+                <button
+                  onClick={handleLogout}
+                  className="text-[#8B7355] hover:text-[#6B5335] font-medium underline"
+                >
+                  Sign out
+                </button>
+              </div>
             )}
-            {syncStatus === 'synced' && (
-              <span className="text-[#4A7C59]">✓ Synced to cloud</span>
-            )}
-            {syncStatus === 'error' && (
-              <span className="text-[#A63446]">⚠ Sync failed</span>
-            )}
-            {syncStatus === 'idle' && (
-              <span className="text-[#5C4D3D]">☁️ Cloud sync enabled</span>
-            )}
+            <div className="flex items-center gap-2">
+              {syncStatus === 'syncing' && (
+                <span className="text-[#8B7355]">☁️ Syncing...</span>
+              )}
+              {syncStatus === 'synced' && (
+                <span className="text-[#4A7C59]">✓ Synced to cloud</span>
+              )}
+              {syncStatus === 'error' && (
+                <span className="text-[#A63446]">⚠ Sync failed</span>
+              )}
+              {syncStatus === 'idle' && user && (
+                <span className="text-[#5C4D3D]">☁️ Cloud sync enabled</span>
+              )}
+            </div>
           </div>
         )}
       </div>
