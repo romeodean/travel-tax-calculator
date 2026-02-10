@@ -1393,7 +1393,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody className="font-mono text-xs">
-                    {[...entries].reverse().map((entry) => {
+                    {[...entries].sort((a, b) => new Date(b.arrivalDate).getTime() - new Date(a.arrivalDate).getTime()).map((entry) => {
                       const depCountry = countries[entry.departureCountry];
                       const arrCountry = countries[entry.arrivalCountry];
                       const DepFlag = FlagComponents[entry.departureCountry];
