@@ -111,26 +111,6 @@ export const getPendingSyncItems = (): PendingSyncItem[] => {
   }
 };
 
-// Clear pending sync items
-const clearPendingSync = (type?: 'entries' | 'countries'): void => {
-  if (typeof window === 'undefined') return;
-
-  try {
-    if (type) {
-      const existing = localStorage.getItem(PENDING_SYNC_KEY);
-      if (existing) {
-        const queue: PendingSyncItem[] = JSON.parse(existing);
-        const filtered = queue.filter(i => i.type !== type);
-        localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(filtered));
-      }
-    } else {
-      localStorage.removeItem(PENDING_SYNC_KEY);
-    }
-  } catch (e) {
-    console.error('Failed to clear pending sync:', e);
-  }
-};
-
 // Check if there are pending syncs
 export const hasPendingSyncs = (): boolean => {
   return getPendingSyncItems().length > 0;
@@ -194,38 +174,36 @@ export const syncTravelEntries = {
     console.log(`💾 Saving ${entries.length} travel entries for user:`, userId);
 
     try {
-      // Delete existing entries for this user
-      const { error: deleteError } = await supabase.from('travel_entries').delete().eq('user_id', userId);
-      if (deleteError) {
+      // Get current entry IDs
+      const currentIds = entries.map(e => e.id);
+
+      // Delete entries that no longer exist
+      const { error: deleteError } = await supabase
+        .from('travel_entries')
+        .delete()
+        .eq('user_id', userId)
+        .not('id', 'in', currentIds.length > 0 ? `(${currentIds.join(',')})` : '()');
+
+      if (deleteError && !deleteError.message.includes('syntax')) {
         console.error('❌ Error deleting old entries:', deleteError);
-
-        // Check if it's a pause/inactive error
-        if (deleteError.message.toLowerCase().includes('paused') || deleteError.message.toLowerCase().includes('inactive')) {
-          savePendingSync({ type: 'entries', data: entries, timestamp: Date.now(), retryCount: 0 });
-          return { success: false, error: 'Supabase project is paused. Data saved locally.' };
-        }
-
-        throw deleteError;
       }
 
-      // Insert all current entries
+      // Upsert all current entries (insert or update)
       if (entries.length > 0) {
         const dbEntries = await Promise.all(entries.map(entryToDB));
-        const { error } = await supabase.from('travel_entries').insert(dbEntries);
+        const { error } = await supabase
+          .from('travel_entries')
+          .upsert(dbEntries, { onConflict: 'id' });
         if (error) {
-          console.error('❌ Error inserting entries:', error);
-          savePendingSync({ type: 'entries', data: entries, timestamp: Date.now(), retryCount: 0 });
+          console.error('❌ Error upserting entries:', error);
           throw error;
         }
       }
 
-      // Clear any pending sync for entries since we succeeded
-      clearPendingSync('entries');
       console.log('✅ Synced travel entries to cloud');
       return { success: true };
     } catch (error: any) {
       console.error('Failed to sync travel entries:', error);
-      savePendingSync({ type: 'entries', data: entries, timestamp: Date.now(), retryCount: 0 });
       return { success: false, error: error.message || 'Sync failed' };
     }
   },
@@ -285,15 +263,8 @@ export const syncCountryRules = {
     const userId = await getUserId();
 
     try {
-      // Delete existing custom countries for this user
-      const { error: deleteError } = await supabase.from('country_rules').delete().eq('user_id', userId);
-      if (deleteError) {
-        // Check if it's a pause/inactive error
-        if (deleteError.message.toLowerCase().includes('paused') || deleteError.message.toLowerCase().includes('inactive')) {
-          savePendingSync({ type: 'countries', data: countries, timestamp: Date.now(), retryCount: 0 });
-          return { success: false, error: 'Supabase project is paused. Data saved locally.' };
-        }
-      }
+      // Delete existing countries for this user first (simpler approach for country_rules)
+      await supabase.from('country_rules').delete().eq('user_id', userId);
 
       // Insert all current countries
       const dbCountries = await Promise.all(
@@ -303,18 +274,14 @@ export const syncCountryRules = {
       if (dbCountries.length > 0) {
         const { error } = await supabase.from('country_rules').insert(dbCountries);
         if (error) {
-          savePendingSync({ type: 'countries', data: countries, timestamp: Date.now(), retryCount: 0 });
           throw error;
         }
       }
 
-      // Clear any pending sync for countries since we succeeded
-      clearPendingSync('countries');
       console.log('✅ Synced country rules to cloud');
       return { success: true };
     } catch (error: any) {
       console.error('Failed to sync country rules:', error);
-      savePendingSync({ type: 'countries', data: countries, timestamp: Date.now(), retryCount: 0 });
       return { success: false, error: error.message || 'Sync failed' };
     }
   },
