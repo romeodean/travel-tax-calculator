@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { TravelEntry, CountryStay, CountryRule } from '@/lib/types';
 import { TAX_RULES } from '@/lib/taxRules';
 import { calculateCountryStays, calculateCountryStaysForYear, getStatusColor, getStatusText } from '@/lib/calculations';
-import { syncTravelEntries, syncCountryRules } from '@/lib/sync';
+import { syncTravelEntries, syncCountryRules, isOnline, hasPendingSyncs, retryPendingSyncs, checkSupabaseHealth, createLocalBackup, getLocalBackups, restoreFromBackup, SyncStatus } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getCurrentUser, signIn, signUp, signOut, hasLocalDataToMigrate, User } from '@/lib/auth';
 import * as Flags from 'country-flag-icons/react/3x2';
@@ -178,9 +178,12 @@ function CalendarView({ entries, countries }: { entries: TravelEntry[]; countrie
                 style={{ backgroundColor: countryCode && !isFuture ? getCountryColor(countryCode) : '#FFFBF0' }}
                 title={country ? country.name : isFuture ? 'Future' : 'Unknown location'}
               >
-                <div className="text-sm font-bold mb-1">{day}</div>
+                <div className="text-sm font-bold mb-0.5">{day}</div>
                 {FlagIcon && !isFuture && (
                   <FlagIcon className="w-6 h-4 rounded shadow-sm" />
+                )}
+                {countryCode && !isFuture && (
+                  <div className="text-[0.5rem] font-bold text-[#5C4D3D] mt-0.5">{countryCode}</div>
                 )}
               </div>
             );
@@ -314,12 +317,22 @@ function AuthModal({ onAuthSuccess }: { onAuthSuccess: (user: User) => void }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showMigrationNotice, setShowMigrationNotice] = useState(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<'checking' | 'healthy' | 'unhealthy'>('checking');
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
 
   useEffect(() => {
     // Check if there's local data to migrate
     if (hasLocalDataToMigrate()) {
       setShowMigrationNotice(true);
     }
+
+    // Check Supabase health
+    const checkHealth = async () => {
+      const result = await checkSupabaseHealth();
+      setSupabaseStatus(result.healthy ? 'healthy' : 'unhealthy');
+      setSupabaseError(result.error || null);
+    };
+    checkHealth();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -439,12 +452,38 @@ function AuthModal({ onAuthSuccess }: { onAuthSuccess: (user: User) => void }) {
         </div>
 
         <div className="mt-6 pt-6 border-t-2 border-[#D4C4A8]">
-          <p className="text-xs text-[#5C4D3D] text-center">
-            {isSupabaseConfigured()
-              ? '🔒 Secure cloud sync enabled'
-              : '⚠️ Cloud sync not configured'
-            }
-          </p>
+          {supabaseStatus === 'checking' && (
+            <p className="text-xs text-[#5C4D3D] text-center">
+              🔄 Checking cloud connection...
+            </p>
+          )}
+          {supabaseStatus === 'healthy' && (
+            <p className="text-xs text-[#5C4D3D] text-center">
+              🔒 Secure cloud sync enabled
+            </p>
+          )}
+          {supabaseStatus === 'unhealthy' && (
+            <div className="text-center">
+              <p className="text-xs text-[#D97706] font-medium">
+                ⚠️ Cloud sync unavailable
+              </p>
+              {supabaseError && (
+                <p className="text-[0.65rem] text-[#A63446] mt-1">
+                  {supabaseError}
+                </p>
+              )}
+              {supabaseError?.includes('paused') && (
+                <p className="text-[0.65rem] text-[#5C4D3D] mt-2">
+                  Visit <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer" className="underline text-[#8B7355]">supabase.com/dashboard</a> to reactivate your project.
+                </p>
+              )}
+            </div>
+          )}
+          {!isSupabaseConfigured() && (
+            <p className="text-xs text-[#5C4D3D] text-center">
+              ⚠️ Cloud sync not configured
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -465,7 +504,10 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showCountryManager, setShowCountryManager] = useState(false);
   const [editingCountry, setEditingCountry] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [isOffline, setIsOffline] = useState(false);
+  const [showBackupModal, setShowBackupModal] = useState(false);
   const [selectedStatusYear, setSelectedStatusYear] = useState<number | 'current'>(getCurrentYear());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -486,7 +528,7 @@ export default function Home() {
     return Array.from(years).sort((a, b) => b - a);
   };
 
-  // Check authentication on mount
+  // Check authentication on mount and set up online/offline listeners
   useEffect(() => {
     const checkAuth = async () => {
       if (!isSupabaseConfigured()) {
@@ -500,6 +542,43 @@ export default function Home() {
     };
 
     checkAuth();
+
+    // Set up online/offline detection
+    const handleOnline = async () => {
+      setIsOffline(false);
+      console.log('🌐 Back online - checking for pending syncs...');
+
+      // Try to sync any pending changes
+      if (hasPendingSyncs()) {
+        setSyncStatus('syncing');
+        const result = await retryPendingSyncs();
+        if (result.success) {
+          setSyncStatus('synced');
+          setSyncError(null);
+          setTimeout(() => setSyncStatus('idle'), 2000);
+        } else {
+          setSyncStatus('error');
+          setSyncError('Some changes could not be synced');
+        }
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOffline(true);
+      setSyncStatus('offline');
+      console.log('📴 Gone offline');
+    };
+
+    // Check initial online status
+    setIsOffline(!isOnline());
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   // Load data from cloud or localStorage on mount (after auth is checked)
@@ -561,21 +640,42 @@ export default function Home() {
     localStorage.setItem('travelEntries', JSON.stringify(entries));
     localStorage.setItem('countryRules', JSON.stringify(countries));
 
+    // Create periodic local backup
+    if (entries.length > 0) {
+      createLocalBackup(entries, countries);
+    }
+
     // Sync to cloud if configured
     const syncToCloud = async () => {
       if (isSupabaseConfigured()) {
+        if (!isOnline()) {
+          setSyncStatus('offline');
+          setSyncError('You are offline. Changes saved locally.');
+          return;
+        }
+
         try {
           setSyncStatus('syncing');
-          await Promise.all([
+          setSyncError(null);
+
+          const [entriesResult, countriesResult] = await Promise.all([
             syncTravelEntries.save(entries),
             syncCountryRules.save(countries)
           ]);
-          setSyncStatus('synced');
-          setTimeout(() => setSyncStatus('idle'), 2000);
-        } catch (error) {
+
+          if (entriesResult.success && countriesResult.success) {
+            setSyncStatus('synced');
+            setSyncError(null);
+            setTimeout(() => setSyncStatus('idle'), 2000);
+          } else {
+            const errorMsg = entriesResult.error || countriesResult.error || 'Sync failed';
+            setSyncStatus('error');
+            setSyncError(errorMsg);
+          }
+        } catch (error: any) {
           console.error('Cloud sync failed:', error);
           setSyncStatus('error');
-          setTimeout(() => setSyncStatus('idle'), 3000);
+          setSyncError(error.message || 'Sync failed - data saved locally');
         }
       }
     };
@@ -862,18 +962,46 @@ export default function Home() {
                 </button>
               </div>
             )}
-            <div className="flex items-center gap-2">
-              {syncStatus === 'syncing' && (
-                <span className="text-[#8B7355]">☁️ Syncing...</span>
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex items-center gap-2">
+                {syncStatus === 'syncing' && (
+                  <span className="text-[#8B7355]">☁️ Syncing...</span>
+                )}
+                {syncStatus === 'synced' && (
+                  <span className="text-[#4A7C59]">✓ Synced to cloud</span>
+                )}
+                {syncStatus === 'error' && (
+                  <span className="text-[#A63446]">⚠ Sync failed</span>
+                )}
+                {syncStatus === 'offline' && (
+                  <span className="text-[#D97706]">📴 Offline - changes saved locally</span>
+                )}
+                {syncStatus === 'paused' && (
+                  <span className="text-[#D97706]">⏸️ Cloud sync paused</span>
+                )}
+                {syncStatus === 'idle' && user && !isOffline && (
+                  <span className="text-[#5C4D3D]">☁️ Cloud sync enabled</span>
+                )}
+              </div>
+              {syncError && syncStatus === 'error' && (
+                <span className="text-[#A63446] text-[0.65rem] max-w-xs text-center">{syncError}</span>
               )}
-              {syncStatus === 'synced' && (
-                <span className="text-[#4A7C59]">✓ Synced to cloud</span>
-              )}
-              {syncStatus === 'error' && (
-                <span className="text-[#A63446]">⚠ Sync failed</span>
-              )}
-              {syncStatus === 'idle' && user && (
-                <span className="text-[#5C4D3D]">☁️ Cloud sync enabled</span>
+              {hasPendingSyncs() && !isOffline && syncStatus !== 'syncing' && (
+                <button
+                  onClick={async () => {
+                    setSyncStatus('syncing');
+                    const result = await retryPendingSyncs();
+                    if (result.success) {
+                      setSyncStatus('synced');
+                      setTimeout(() => setSyncStatus('idle'), 2000);
+                    } else {
+                      setSyncStatus('error');
+                    }
+                  }}
+                  className="text-[#8B7355] hover:text-[#6B5335] text-[0.65rem] underline"
+                >
+                  Retry sync ({hasPendingSyncs() ? 'pending changes' : ''})
+                </button>
               )}
             </div>
           </div>
@@ -998,6 +1126,14 @@ export default function Home() {
                 >
                   🌍 Manage Countries
                 </button>
+                {getLocalBackups().length > 0 && (
+                  <button
+                    onClick={() => setShowBackupModal(true)}
+                    className="w-full px-3 py-2 bg-[#D97706] text-white text-sm rounded font-medium hover:bg-[#B45309] transition-colors border-2 border-[#B45309]"
+                  >
+                    🔄 Restore from Backup
+                  </button>
+                )}
                 {entries.length > 0 && (
                   <button
                     onClick={clearAllData}
@@ -1090,6 +1226,62 @@ export default function Home() {
 
         {/* Calendar & History - Right Column (2 cols) */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Backup Restore Modal */}
+          {showBackupModal && (
+            <div className="bg-[#FFFBF0] border-2 border-[#D4C4A8] rounded-lg p-6 card-shadow">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-[#2D2419]">🔄 RESTORE FROM BACKUP</h2>
+                <button
+                  onClick={() => setShowBackupModal(false)}
+                  className="px-3 py-1 border-2 border-[#D4C4A8] rounded font-bold hover:bg-[#E8DCC4]"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-sm text-[#5C4D3D] mb-4">
+                Your data is automatically backed up locally. Select a backup to restore:
+              </p>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {getLocalBackups().map(backup => (
+                  <div key={backup.key} className="border-2 border-[#D4C4A8] rounded-lg p-3 bg-white flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-medium">
+                        {new Date(backup.timestamp).toLocaleString()}
+                      </p>
+                      <p className="text-xs text-[#5C4D3D]">
+                        {backup.entryCount} entries
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Restore this backup? This will replace your current data.')) {
+                          const data = restoreFromBackup(backup.key);
+                          if (data) {
+                            setEntries(data.entries);
+                            if (Object.keys(data.countries).length > 0) {
+                              setCountries(data.countries);
+                            }
+                            setShowBackupModal(false);
+                          } else {
+                            alert('Failed to restore backup');
+                          }
+                        }
+                      }}
+                      className="px-3 py-1 bg-[#4A7C59] text-white text-sm rounded hover:bg-[#3A6C49]"
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {getLocalBackups().length === 0 && (
+                <p className="text-center text-sm text-[#5C4D3D] py-4">
+                  No backups available yet.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Country Manager Modal */}
           {showCountryManager && (
             <div className="bg-[#FFFBF0] border-2 border-[#D4C4A8] rounded-lg p-6 card-shadow">
