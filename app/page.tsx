@@ -582,26 +582,30 @@ export default function Home() {
   }, []);
 
   // Load data from cloud or localStorage on mount (after auth is checked)
+  // Skip if user just authenticated (handleAuthSuccess handles that case)
   useEffect(() => {
     if (authLoading) return; // Wait for auth check
+    if (dataLoaded) return; // Already loaded (e.g., from handleAuthSuccess)
 
     const loadData = async () => {
       // Try to load from cloud first
-      if (isSupabaseConfigured()) {
+      if (isSupabaseConfigured() && user) {
         try {
           const cloudEntries = await syncTravelEntries.load();
           const cloudCountries = await syncCountryRules.load();
 
-          if (cloudEntries) {
+          if (cloudEntries && cloudEntries.length > 0) {
             setEntries(cloudEntries);
+            localStorage.setItem('travelEntries', JSON.stringify(cloudEntries));
           } else {
             // Fallback to localStorage
             const saved = localStorage.getItem('travelEntries');
             if (saved) setEntries(JSON.parse(saved));
           }
 
-          if (cloudCountries) {
+          if (cloudCountries && Object.keys(cloudCountries).length > 0) {
             setCountries(cloudCountries);
+            localStorage.setItem('countryRules', JSON.stringify(cloudCountries));
           } else {
             // Fallback to localStorage
             const savedCountries = localStorage.getItem('countryRules');
@@ -630,7 +634,7 @@ export default function Home() {
     };
 
     loadData();
-  }, [authLoading]);
+  }, [authLoading, user, dataLoaded]);
 
   // Save to localStorage and cloud, then recalculate whenever entries or countries change
   useEffect(() => {
@@ -898,16 +902,30 @@ export default function Home() {
   const handleAuthSuccess = async (authenticatedUser: User) => {
     setUser(authenticatedUser);
 
-    // After successful auth, check if there's local data to migrate
-    if (hasLocalDataToMigrate()) {
+    // First, try to load existing data from cloud for this user
+    const cloudEntries = await syncTravelEntries.load();
+    const cloudCountries = await syncCountryRules.load();
+
+    if (cloudEntries && cloudEntries.length > 0) {
+      // User has existing cloud data - use it
+      setEntries(cloudEntries);
+      localStorage.setItem('travelEntries', JSON.stringify(cloudEntries));
+
+      if (cloudCountries && Object.keys(cloudCountries).length > 0) {
+        setCountries(cloudCountries);
+        localStorage.setItem('countryRules', JSON.stringify(cloudCountries));
+      }
+    } else if (hasLocalDataToMigrate()) {
+      // No cloud data, but has local data - migrate it to cloud
       const localEntries = localStorage.getItem('travelEntries');
       const localCountries = localStorage.getItem('countryRules');
 
-      // Sync local data to cloud for this user
       if (localEntries) {
         const parsedEntries = JSON.parse(localEntries);
-        await syncTravelEntries.save(parsedEntries);
-        setEntries(parsedEntries);
+        if (parsedEntries.length > 0) {
+          await syncTravelEntries.save(parsedEntries);
+          setEntries(parsedEntries);
+        }
       }
 
       if (localCountries) {
@@ -916,6 +934,8 @@ export default function Home() {
         setCountries(parsedCountries);
       }
     }
+
+    setDataLoaded(true);
   };
 
   // Show auth modal if Supabase is configured but user is not authenticated
