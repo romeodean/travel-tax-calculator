@@ -1,0 +1,21 @@
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    # Run every 3 days at noon UTC to prevent Supabase free tier from pausing
+    - cron: '0 12 */3 * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping keep-alive endpoint
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://travel-tax-calculator.vercel.app/api/keep-alive)
+          echo "Response code: $response"
+          if [ "$response" != "200" ]; then
+            echo "::warning::Keep-alive ping returned $response"
+            exit 1
+          fi
+          echo "Supabase keep-alive ping successful"
