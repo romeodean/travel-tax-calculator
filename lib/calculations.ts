@@ -1,5 +1,6 @@
 import { TravelEntry, CountryStay, CountryRule } from './types';
 import { TAX_RULES } from './taxRules';
+import { parseLocalDate } from './dateUtils';
 
 export function calculateDaysInCountry(
   entries: TravelEntry[],
@@ -9,14 +10,14 @@ export function calculateDaysInCountry(
 ): number {
   let totalDays = 0;
   const sortedEntries = [...entries].sort(
-    (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+    (a, b) => parseLocalDate(a.departureDate).getTime() - parseLocalDate(b.departureDate).getTime()
   );
 
   for (let i = 0; i < sortedEntries.length; i++) {
     const entry = sortedEntries[i];
-    const arrival = new Date(entry.arrivalDate);
+    const arrival = parseLocalDate(entry.arrivalDate);
     const departure = i < sortedEntries.length - 1
-      ? new Date(sortedEntries[i + 1].departureDate)
+      ? parseLocalDate(sortedEntries[i + 1].departureDate)
       : new Date(); // If no next entry, assume still there
 
     // Only count if arrival country matches

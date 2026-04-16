@@ -7,6 +7,7 @@ import { calculateCountryStays, calculateCountryStaysForYear, getStatusColor, ge
 import { syncTravelEntries, syncCountryRules, isOnline, hasPendingSyncs, retryPendingSyncs, checkSupabaseHealth, createLocalBackup, getLocalBackups, restoreFromBackup, SyncStatus } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getCurrentUser, signIn, signUp, signOut, hasLocalDataToMigrate, User } from '@/lib/auth';
+import { parseLocalDate } from '@/lib/dateUtils';
 import * as Flags from 'country-flag-icons/react/3x2';
 
 // Map country codes to flag components
@@ -84,13 +85,12 @@ function CalendarView({ entries, countries }: { entries: TravelEntry[]; countrie
     if (isFutureDate(date)) return null;
 
     const sortedEntries = [...entries].sort(
-      (a, b) => new Date(a.arrivalDate).getTime() - new Date(b.arrivalDate).getTime()
+      (a, b) => parseLocalDate(a.arrivalDate).getTime() - parseLocalDate(b.arrivalDate).getTime()
     );
 
     for (let i = sortedEntries.length - 1; i >= 0; i--) {
       const entry = sortedEntries[i];
-      const arrivalDate = new Date(entry.arrivalDate);
-      arrivalDate.setHours(0, 0, 0, 0);
+      const arrivalDate = parseLocalDate(entry.arrivalDate);
 
       const checkDate = new Date(date);
       checkDate.setHours(0, 0, 0, 0);
@@ -521,8 +521,8 @@ export default function Home() {
 
     const years = new Set<number>();
     entries.forEach(entry => {
-      years.add(new Date(entry.arrivalDate).getFullYear());
-      years.add(new Date(entry.departureDate).getFullYear());
+      years.add(parseLocalDate(entry.arrivalDate).getFullYear());
+      years.add(parseLocalDate(entry.departureDate).getFullYear());
     });
 
     return Array.from(years).sort((a, b) => b - a);
@@ -696,9 +696,9 @@ export default function Home() {
       let days = 0;
       entries.forEach(entry => {
         if (entry.arrivalCountry === rule.code) {
-          const arrival = new Date(entry.arrivalDate);
-          const nextEntry = entries.find(e => new Date(e.departureDate) > arrival && e.departureCountry === entry.arrivalCountry);
-          const departure = nextEntry ? new Date(nextEntry.departureDate) : new Date();
+          const arrival = parseLocalDate(entry.arrivalDate);
+          const nextEntry = entries.find(e => parseLocalDate(e.departureDate) > arrival && e.departureCountry === entry.arrivalCountry);
+          const departure = nextEntry ? parseLocalDate(nextEntry.departureDate) : new Date();
 
           const periodStart = arrival > range.start ? arrival : range.start;
           const periodEnd = departure < range.end ? departure : range.end;
@@ -1427,14 +1427,14 @@ export default function Home() {
                               <span>{depCountry?.code}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-2">{new Date(entry.departureDate).toLocaleDateString()}</td>
+                          <td className="py-3 px-2">{parseLocalDate(entry.departureDate).toLocaleDateString()}</td>
                           <td className="py-3 px-2">
                             <div className="flex items-center gap-2">
                               {ArrFlag && <ArrFlag className="w-5 h-3 rounded" />}
                               <span>{arrCountry?.code}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-2">{new Date(entry.arrivalDate).toLocaleDateString()}</td>
+                          <td className="py-3 px-2">{parseLocalDate(entry.arrivalDate).toLocaleDateString()}</td>
                           <td className="py-3 px-2">
                             <button
                               onClick={() => editEntry(entry)}
