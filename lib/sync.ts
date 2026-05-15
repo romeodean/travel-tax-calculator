@@ -158,7 +158,7 @@ const countryFromDB = (dbRule: CountryRuleDB): { code: string; rule: CountryRule
 
 // Sync functions
 export const syncTravelEntries = {
-  async save(entries: TravelEntry[]): Promise<{ success: boolean; error?: string }> {
+  async save(entries: TravelEntry[], deletedIds?: string[]): Promise<{ success: boolean; error?: string }> {
     if (!isSupabaseConfigured() || !supabase) {
       console.log('Supabase not configured, using localStorage only');
       return { success: true };
@@ -174,18 +174,17 @@ export const syncTravelEntries = {
     console.log(`💾 Saving ${entries.length} travel entries for user:`, userId);
 
     try {
-      // Get current entry IDs
-      const currentIds = entries.map(e => e.id);
+      // Only delete specific entries the user explicitly deleted
+      if (deletedIds && deletedIds.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('travel_entries')
+          .delete()
+          .eq('user_id', userId)
+          .in('id', deletedIds);
 
-      // Delete entries that no longer exist
-      const { error: deleteError } = await supabase
-        .from('travel_entries')
-        .delete()
-        .eq('user_id', userId)
-        .not('id', 'in', currentIds.length > 0 ? `(${currentIds.join(',')})` : '()');
-
-      if (deleteError && !deleteError.message.includes('syntax')) {
-        console.error('❌ Error deleting old entries:', deleteError);
+        if (deleteError) {
+          console.error('❌ Error deleting entries:', deleteError);
+        }
       }
 
       // Upsert all current entries (insert or update)

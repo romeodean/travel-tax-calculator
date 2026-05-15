@@ -42,8 +42,8 @@ function CalendarView({ entries, countries }: { entries: TravelEntry[]; countrie
   const years = Array.from(
     new Set(
       entries.flatMap(e => [
-        new Date(e.departureDate).getFullYear(),
-        new Date(e.arrivalDate).getFullYear()
+        parseLocalDate(e.departureDate).getFullYear(),
+        parseLocalDate(e.arrivalDate).getFullYear()
       ])
     )
   ).sort((a, b) => b - a);
@@ -509,6 +509,7 @@ export default function Home() {
   const [isOffline, setIsOffline] = useState(false);
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [selectedStatusYear, setSelectedStatusYear] = useState<number | 'current'>(getCurrentYear());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function getCurrentYear() {
@@ -588,45 +589,44 @@ export default function Home() {
     if (dataLoaded) return; // Already loaded (e.g., from handleAuthSuccess)
 
     const loadData = async () => {
-      // Try to load from cloud first
+      // Load local data first
+      const saved = localStorage.getItem('travelEntries');
+      const savedCountries = localStorage.getItem('countryRules');
+      const localEntries: TravelEntry[] = saved ? JSON.parse(saved) : [];
+      const localCountries: Record<string, CountryRule> | null = savedCountries ? JSON.parse(savedCountries) : null;
+
       if (isSupabaseConfigured() && user) {
         try {
           const cloudEntries = await syncTravelEntries.load();
           const cloudCountries = await syncCountryRules.load();
 
-          if (cloudEntries && cloudEntries.length > 0) {
-            setEntries(cloudEntries);
-            localStorage.setItem('travelEntries', JSON.stringify(cloudEntries));
-          } else {
-            // Fallback to localStorage
-            const saved = localStorage.getItem('travelEntries');
-            if (saved) setEntries(JSON.parse(saved));
+          // Merge cloud + local entries by ID (union, not replace)
+          const mergedMap = new Map<string, TravelEntry>();
+          localEntries.forEach(e => mergedMap.set(e.id, e));
+          if (cloudEntries) {
+            cloudEntries.forEach(e => mergedMap.set(e.id, e)); // cloud wins on conflicts
+          }
+          const mergedEntries = Array.from(mergedMap.values());
+
+          if (mergedEntries.length > 0) {
+            setEntries(mergedEntries);
+            localStorage.setItem('travelEntries', JSON.stringify(mergedEntries));
           }
 
           if (cloudCountries && Object.keys(cloudCountries).length > 0) {
             setCountries(cloudCountries);
             localStorage.setItem('countryRules', JSON.stringify(cloudCountries));
-          } else {
-            // Fallback to localStorage
-            const savedCountries = localStorage.getItem('countryRules');
-            if (savedCountries) {
-              setCountries(JSON.parse(savedCountries));
-            }
+          } else if (localCountries) {
+            setCountries(localCountries);
           }
         } catch (error) {
           console.error('Cloud load failed, using localStorage', error);
-          // Fallback to localStorage
-          const saved = localStorage.getItem('travelEntries');
-          const savedCountries = localStorage.getItem('countryRules');
-          if (saved) setEntries(JSON.parse(saved));
-          if (savedCountries) setCountries(JSON.parse(savedCountries));
+          if (localEntries.length > 0) setEntries(localEntries);
+          if (localCountries) setCountries(localCountries);
         }
       } else {
-        // No cloud configured, use localStorage only
-        const saved = localStorage.getItem('travelEntries');
-        const savedCountries = localStorage.getItem('countryRules');
-        if (saved) setEntries(JSON.parse(saved));
-        if (savedCountries) setCountries(JSON.parse(savedCountries));
+        if (localEntries.length > 0) setEntries(localEntries);
+        if (localCountries) setCountries(localCountries);
       }
 
       // Mark data as loaded to prevent sync loop
@@ -662,8 +662,11 @@ export default function Home() {
           setSyncStatus('syncing');
           setSyncError(null);
 
+          const idsToDelete = [...pendingDeleteIds];
+          setPendingDeleteIds([]);
+
           const [entriesResult, countriesResult] = await Promise.all([
-            syncTravelEntries.save(entries),
+            syncTravelEntries.save(entries, idsToDelete.length > 0 ? idsToDelete : undefined),
             syncCountryRules.save(countries)
           ]);
 
@@ -779,6 +782,7 @@ export default function Home() {
 
   const deleteEntry = (id: string) => {
     if (confirm('Are you sure you want to delete this entry?')) {
+      setPendingDeleteIds(prev => [...prev, id]);
       setEntries(entries.filter(e => e.id !== id));
       if (editingId === id) {
         cancelEdit();
@@ -788,6 +792,7 @@ export default function Home() {
 
   const clearAllData = () => {
     if (confirm('Are you sure you want to clear all travel data?')) {
+      setPendingDeleteIds(prev => [...prev, ...entries.map(e => e.id)]);
       setEntries([]);
       localStorage.removeItem('travelEntries');
     }
@@ -902,35 +907,33 @@ export default function Home() {
   const handleAuthSuccess = async (authenticatedUser: User) => {
     setUser(authenticatedUser);
 
-    // First, try to load existing data from cloud for this user
+    // Load from both sources and merge
     const cloudEntries = await syncTravelEntries.load();
     const cloudCountries = await syncCountryRules.load();
 
-    if (cloudEntries && cloudEntries.length > 0) {
-      // User has existing cloud data - use it
-      setEntries(cloudEntries);
-      localStorage.setItem('travelEntries', JSON.stringify(cloudEntries));
+    const localEntriesRaw = localStorage.getItem('travelEntries');
+    const localEntries: TravelEntry[] = localEntriesRaw ? JSON.parse(localEntriesRaw) : [];
 
-      if (cloudCountries && Object.keys(cloudCountries).length > 0) {
-        setCountries(cloudCountries);
-        localStorage.setItem('countryRules', JSON.stringify(cloudCountries));
-      }
-    } else if (hasLocalDataToMigrate()) {
-      // No cloud data, but has local data - migrate it to cloud
-      const localEntries = localStorage.getItem('travelEntries');
-      const localCountries = localStorage.getItem('countryRules');
+    // Merge cloud + local entries by ID (union, not replace)
+    const mergedMap = new Map<string, TravelEntry>();
+    localEntries.forEach(e => mergedMap.set(e.id, e));
+    if (cloudEntries) {
+      cloudEntries.forEach(e => mergedMap.set(e.id, e));
+    }
+    const mergedEntries = Array.from(mergedMap.values());
 
-      if (localEntries) {
-        const parsedEntries = JSON.parse(localEntries);
-        if (parsedEntries.length > 0) {
-          await syncTravelEntries.save(parsedEntries);
-          setEntries(parsedEntries);
-        }
-      }
+    if (mergedEntries.length > 0) {
+      setEntries(mergedEntries);
+      localStorage.setItem('travelEntries', JSON.stringify(mergedEntries));
+    }
 
-      if (localCountries) {
-        const parsedCountries = JSON.parse(localCountries);
-        await syncCountryRules.save(parsedCountries);
+    if (cloudCountries && Object.keys(cloudCountries).length > 0) {
+      setCountries(cloudCountries);
+      localStorage.setItem('countryRules', JSON.stringify(cloudCountries));
+    } else {
+      const localCountriesRaw = localStorage.getItem('countryRules');
+      if (localCountriesRaw) {
+        const parsedCountries = JSON.parse(localCountriesRaw);
         setCountries(parsedCountries);
       }
     }
@@ -1413,7 +1416,7 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody className="font-mono text-xs">
-                    {[...entries].sort((a, b) => new Date(b.arrivalDate).getTime() - new Date(a.arrivalDate).getTime()).map((entry) => {
+                    {[...entries].sort((a, b) => parseLocalDate(b.arrivalDate).getTime() - parseLocalDate(a.arrivalDate).getTime()).map((entry) => {
                       const depCountry = countries[entry.departureCountry];
                       const arrCountry = countries[entry.arrivalCountry];
                       const DepFlag = FlagComponents[entry.departureCountry];
