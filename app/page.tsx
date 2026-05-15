@@ -8,7 +8,19 @@ import { syncTravelEntries, syncCountryRules, isOnline, hasPendingSyncs, retryPe
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getCurrentUser, signIn, signUp, signOut, hasLocalDataToMigrate, User } from '@/lib/auth';
 import { parseLocalDate } from '@/lib/dateUtils';
+import { BASELINE_ENTRIES } from '@/lib/baselineData';
 import * as Flags from 'country-flag-icons/react/3x2';
+
+/** Merge multiple entry arrays by ID. Later arrays win on conflicts. */
+function mergeEntries(...sources: TravelEntry[][]): TravelEntry[] {
+  const map = new Map<string, TravelEntry>();
+  for (const entries of sources) {
+    for (const e of entries) {
+      map.set(e.id, e);
+    }
+  }
+  return Array.from(map.values());
+}
 
 // Map country codes to flag components
 const FlagComponents: Record<string, any> = {
@@ -589,7 +601,7 @@ export default function Home() {
     if (dataLoaded) return; // Already loaded (e.g., from handleAuthSuccess)
 
     const loadData = async () => {
-      // Load local data first
+      // Load local data
       const saved = localStorage.getItem('travelEntries');
       const savedCountries = localStorage.getItem('countryRules');
       const localEntries: TravelEntry[] = saved ? JSON.parse(saved) : [];
@@ -600,18 +612,10 @@ export default function Home() {
           const cloudEntries = await syncTravelEntries.load();
           const cloudCountries = await syncCountryRules.load();
 
-          // Merge cloud + local entries by ID (union, not replace)
-          const mergedMap = new Map<string, TravelEntry>();
-          localEntries.forEach(e => mergedMap.set(e.id, e));
-          if (cloudEntries) {
-            cloudEntries.forEach(e => mergedMap.set(e.id, e)); // cloud wins on conflicts
-          }
-          const mergedEntries = Array.from(mergedMap.values());
-
-          if (mergedEntries.length > 0) {
-            setEntries(mergedEntries);
-            localStorage.setItem('travelEntries', JSON.stringify(mergedEntries));
-          }
+          // Merge baseline + local + cloud (later sources win on ID conflicts)
+          const merged = mergeEntries(BASELINE_ENTRIES, localEntries, cloudEntries || []);
+          setEntries(merged);
+          localStorage.setItem('travelEntries', JSON.stringify(merged));
 
           if (cloudCountries && Object.keys(cloudCountries).length > 0) {
             setCountries(cloudCountries);
@@ -621,11 +625,13 @@ export default function Home() {
           }
         } catch (error) {
           console.error('Cloud load failed, using localStorage', error);
-          if (localEntries.length > 0) setEntries(localEntries);
+          const merged = mergeEntries(BASELINE_ENTRIES, localEntries);
+          setEntries(merged);
           if (localCountries) setCountries(localCountries);
         }
       } else {
-        if (localEntries.length > 0) setEntries(localEntries);
+        const merged = mergeEntries(BASELINE_ENTRIES, localEntries);
+        setEntries(merged);
         if (localCountries) setCountries(localCountries);
       }
 
@@ -907,25 +913,16 @@ export default function Home() {
   const handleAuthSuccess = async (authenticatedUser: User) => {
     setUser(authenticatedUser);
 
-    // Load from both sources and merge
+    // Load from both sources and merge with baseline
     const cloudEntries = await syncTravelEntries.load();
     const cloudCountries = await syncCountryRules.load();
 
     const localEntriesRaw = localStorage.getItem('travelEntries');
     const localEntries: TravelEntry[] = localEntriesRaw ? JSON.parse(localEntriesRaw) : [];
 
-    // Merge cloud + local entries by ID (union, not replace)
-    const mergedMap = new Map<string, TravelEntry>();
-    localEntries.forEach(e => mergedMap.set(e.id, e));
-    if (cloudEntries) {
-      cloudEntries.forEach(e => mergedMap.set(e.id, e));
-    }
-    const mergedEntries = Array.from(mergedMap.values());
-
-    if (mergedEntries.length > 0) {
-      setEntries(mergedEntries);
-      localStorage.setItem('travelEntries', JSON.stringify(mergedEntries));
-    }
+    const merged = mergeEntries(BASELINE_ENTRIES, localEntries, cloudEntries || []);
+    setEntries(merged);
+    localStorage.setItem('travelEntries', JSON.stringify(merged));
 
     if (cloudCountries && Object.keys(cloudCountries).length > 0) {
       setCountries(cloudCountries);
