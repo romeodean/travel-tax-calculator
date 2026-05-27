@@ -246,6 +246,49 @@ export const syncTravelEntries = {
   },
 };
 
+export async function migrateDeviceEntriesToUser(): Promise<TravelEntry[]> {
+  if (!isSupabaseConfigured() || !supabase || typeof window === 'undefined') return [];
+
+  const user = await getCurrentUser();
+  if (!user) return [];
+
+  const deviceId = localStorage.getItem('deviceId');
+  if (!deviceId) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('travel_entries')
+      .select('*')
+      .eq('user_id', deviceId);
+
+    if (error || !data || data.length === 0) return [];
+
+    console.log(`🔄 Migrating ${data.length} entries from device ${deviceId} to user ${user.id}`);
+
+    const { error: updateError } = await supabase
+      .from('travel_entries')
+      .update({ user_id: user.id })
+      .eq('user_id', deviceId);
+
+    if (updateError) {
+      console.error('Migration failed:', updateError);
+      return [];
+    }
+
+    // Also migrate country rules
+    await supabase
+      .from('country_rules')
+      .update({ user_id: user.id })
+      .eq('user_id', deviceId);
+
+    console.log('✅ Device data migrated to authenticated account');
+    return data.map(entryFromDB);
+  } catch (e) {
+    console.error('Migration error:', e);
+    return [];
+  }
+}
+
 export const syncCountryRules = {
   async save(countries: Record<string, CountryRule>): Promise<{ success: boolean; error?: string }> {
     if (!isSupabaseConfigured() || !supabase) {

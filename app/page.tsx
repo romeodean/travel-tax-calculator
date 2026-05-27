@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { TravelEntry, CountryStay, CountryRule } from '@/lib/types';
 import { TAX_RULES } from '@/lib/taxRules';
 import { calculateCountryStays, calculateCountryStaysForYear, getStatusColor, getStatusText } from '@/lib/calculations';
-import { syncTravelEntries, syncCountryRules, isOnline, hasPendingSyncs, retryPendingSyncs, checkSupabaseHealth, createLocalBackup, getLocalBackups, restoreFromBackup, SyncStatus } from '@/lib/sync';
+import { syncTravelEntries, syncCountryRules, migrateDeviceEntriesToUser, isOnline, hasPendingSyncs, retryPendingSyncs, checkSupabaseHealth, createLocalBackup, getLocalBackups, restoreFromBackup, SyncStatus } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getCurrentUser, signIn, signUp, signOut, hasLocalDataToMigrate, User } from '@/lib/auth';
 import { parseLocalDate } from '@/lib/dateUtils';
@@ -912,7 +912,9 @@ export default function Home() {
   const handleAuthSuccess = async (authenticatedUser: User) => {
     setUser(authenticatedUser);
 
-    // Load from both sources and merge with baseline
+    // Migrate any entries stored under the old anonymous device ID
+    const migratedEntries = await migrateDeviceEntriesToUser();
+
     const cloudEntries = await syncTravelEntries.load();
     const cloudCountries = await syncCountryRules.load();
 
