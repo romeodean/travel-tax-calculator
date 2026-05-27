@@ -8,7 +8,6 @@ import { syncTravelEntries, syncCountryRules, isOnline, hasPendingSyncs, retryPe
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getCurrentUser, signIn, signUp, signOut, hasLocalDataToMigrate, User } from '@/lib/auth';
 import { parseLocalDate } from '@/lib/dateUtils';
-import { BASELINE_ENTRIES } from '@/lib/baselineData';
 import * as Flags from 'country-flag-icons/react/3x2';
 
 /** Merge multiple entry arrays by ID. Later arrays win on conflicts. */
@@ -613,7 +612,7 @@ export default function Home() {
           const cloudCountries = await syncCountryRules.load();
 
           // Merge baseline + local + cloud (later sources win on ID conflicts)
-          const merged = mergeEntries(BASELINE_ENTRIES, localEntries, cloudEntries || []);
+          const merged = mergeEntries(localEntries, cloudEntries || []);
           setEntries(merged);
           localStorage.setItem('travelEntries', JSON.stringify(merged));
 
@@ -625,12 +624,12 @@ export default function Home() {
           }
         } catch (error) {
           console.error('Cloud load failed, using localStorage', error);
-          const merged = mergeEntries(BASELINE_ENTRIES, localEntries);
+          const merged = mergeEntries(localEntries);
           setEntries(merged);
           if (localCountries) setCountries(localCountries);
         }
       } else {
-        const merged = mergeEntries(BASELINE_ENTRIES, localEntries);
+        const merged = mergeEntries(localEntries);
         setEntries(merged);
         if (localCountries) setCountries(localCountries);
       }
@@ -920,7 +919,7 @@ export default function Home() {
     const localEntriesRaw = localStorage.getItem('travelEntries');
     const localEntries: TravelEntry[] = localEntriesRaw ? JSON.parse(localEntriesRaw) : [];
 
-    const merged = mergeEntries(BASELINE_ENTRIES, localEntries, cloudEntries || []);
+    const merged = mergeEntries(localEntries, cloudEntries || []);
     setEntries(merged);
     localStorage.setItem('travelEntries', JSON.stringify(merged));
 
