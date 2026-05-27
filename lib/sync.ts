@@ -57,23 +57,11 @@ export const checkSupabaseHealth = async (): Promise<{ healthy: boolean; error?:
   }
 };
 
-// Get user ID (either from auth or fallback to deviceId for backwards compatibility)
 const getUserId = async (): Promise<string> => {
   if (typeof window === 'undefined') return 'server';
-
-  // Try to get authenticated user first
   const user = await getCurrentUser();
-  if (user) {
-    return user.id;
-  }
-
-  // Fallback to deviceId for anonymous users (backwards compatibility)
-  let deviceId = localStorage.getItem('deviceId');
-  if (!deviceId) {
-    deviceId = `device_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-    localStorage.setItem('deviceId', deviceId);
-  }
-  return deviceId;
+  if (!user) throw new Error('Not authenticated');
+  return user.id;
 };
 
 // Save pending sync items for later retry
